@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Avatar AI · Face Detection PRO</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,body{margin:0;padding:0;height:100%;width:100%;background:#000;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    body{display:flex;flex-direction:column;overflow:hidden}
+    header{
+      padding:10px 14px;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;
+      color:#ddd;display:flex;justify-content:space-between;align-items:center;
+      background:rgba(0,0,0,.35);backdrop-filter:blur(8px);border-bottom:1px solid rgba(255,255,255,.08);z-index:1000
+    }
+    .app{position:relative;flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .frame{position:relative;width:100vw;max-width:540px;aspect-ratio:9/16;overflow:hidden;background:#000}
+
+    .overlay{
+      position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;
+      padding:18px;background:radial-gradient(ellipse at center, rgba(0,0,0,.45), rgba(0,0,0,.90));z-index:5
+    }
+    .overlay.hidden{display:none}
+    .card{
+      max-width:360px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+      border-radius:16px;padding:14px 14px;backdrop-filter:blur(10px)
+    }
+    .title{font-size:.95rem;font-weight:650;margin-bottom:6px}
+    .sub{font-size:.8rem;opacity:.9;line-height:1.35}
+
+    #heygen-streaming-embed{
+      position:absolute!important;inset:0!important;width:100%!important;height:100%!important;border:none!important;
+      opacity:0;visibility:hidden;z-index:10;transition:opacity .25s ease-out
+    }
+    #heygen-streaming-embed.show{opacity:1;visibility:visible}
+    #heygen-streaming-container,#heygen-streaming-container iframe{width:100%!important;height:100%!important;border:0!important}
+
+    #camVideo{position:fixed;width:1px;height:1px;left:-9999px;top:-9999px;opacity:0;pointer-events:none}
+
+    #hud{
+      position:absolute;top:10px;left:10px;z-index:20;font-size:12px;color:#fff;
+      background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.18);
+      padding:8px 10px;border-radius:12px;display:none;white-space:pre-line
+    }
+    #hud.show{display:block}
+  </style>
+</head>
+
+<body>
+  <header>
+    <div>Avatar AI</div>
+    <div>Face Detection PRO</div>
+  </header>
+
+  <div class="app">
+    <div class="frame" id="frame">
+      <div id="hud"></div>
+
+      <div class="overlay" id="ovIdle">
+        <div class="card">
+          <div class="title">Avvicinati per attivare l’assistente</div>
+          <div class="sub">L’avatar si avvia automaticamente quando la camera rileva un volto.</div>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="ovPerm">
+        <div class="card">
+          <div class="title">Consenti la videocamera</div>
+          <div class="sub">Serve per rilevare il volto. Abilita i permessi nel browser.</div>
+        </div>
+      </div>
+
+      <div class="overlay hidden" id="ovErr">
+        <div class="card">
+          <div class="title">Errore videocamera</div>
+          <div class="sub" id="ovErrMsg">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <video id="camVideo" autoplay muted playsinline></video>
+
+  <!-- MediaPipe locali -->
+  <script src="./camera_utils.js"></script>
+  <script src="./face_detection.js"></script>
+
+  <script>
+    // ===== CONFIG PRO =====
+    const CONFIG = {
+      debug: false,              // metti true per HUD
+      presenceOnMs: 550,
+      presenceOffMs: 1300,
+      minOnDurationMs: 7000,
+      minOffDurationMs: 2500,
+      detectionConfidence: 0.70,
+      selfieMode: true,
+      locateAssets: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+    };
+
+    // ===== HEYGEN URL (TUO EMBED) =====
+    const HEYGEN_HOST = "https://labs.heygen.com";
+    const HEYGEN_URL =
+      HEYGEN_HOST +
+      "/guest/streaming-embed?share=eyJxdWFsaXR5IjoiaGlnaCIsImF2YXRhck5hbWUiOiJLYXR5YV9Qcm9mZXNzaW9uYWxMb29rX3B1%0D%0AYmxpYyIsInByZXZpZXdJbWciOiJodHRwczovL2ZpbGVzMi5oZXlnZW4uYWkvYXZhdGFyL3YzLzM0%0D%0AOGRkZjUwM2M2NTRiOWJiYmI4YmVhOWY5MjEwZWFkXzU1ODcwL3ByZXZpZXdfdGFyZ2V0LndlYnAi%0D%0ALCJuZWVkUmVtb3ZlQmFja2dyb3VuZCI6dHJ1ZSwia25vd2xlZGdlQmFzZUlkIjoiY2E3M2VmNmY2%0D%0AOTdhNGFhMTgzZGM1MzZkY2EyMDY3YmYiLCJ1c2VybmFtZSI6ImZiNDBjZGI1NjdlZjRjMTg5MDM4%0D%0ANDkwODI5YzIwZTZmIn0%3D&inIFrame=1";
+
+    // ===== UI refs =====
+    const frame = document.getElementById("frame");
+    const hud = document.getElementById("hud");
+    const ovIdle = document.getElementById("ovIdle");
+    const ovPerm = document.getElementById("ovPerm");
+    const ovErr = document.getElementById("ovErr");
+    const ovErrMsg = document.getElementById("ovErrMsg");
+    const camVideo = document.getElementById("camVideo");
+    if (CONFIG.debug) hud.classList.add("show");
+
+    // ===== Build HeyGen wrapper =====
+    const heygenWrap = document.createElement("div");
+    heygenWrap.id = "heygen-streaming-embed";
+    const heygenContainer = document.createElement("div");
+    heygenContainer.id = "heygen-streaming-container";
+    const heygenIframe = document.createElement("iframe");
+    heygenIframe.allowFullscreen = false;
+    heygenIframe.title = "Avatar AI";
+    heygenIframe.role = "dialog";
+    heygenIframe.allow = "microphone";
+    heygenIframe.src = "about:blank"; // start paused
+    heygenContainer.appendChild(heygenIframe);
+    heygenWrap.appendChild(heygenContainer);
+    frame.appendChild(heygenWrap);
+
+    // ===== Presence state machine =====
+    let isActive = false;
+    let lastSwitchAt = 0;
+    let facePresentSince = null;
+    let faceAbsentSince = null;
+    const now = () => Date.now();
+    const canSwitchToActive = () => (now() - lastSwitchAt) >= CONFIG.minOffDurationMs;
+    const canSwitchToPaused = () => (now() - lastSwitchAt) >= CONFIG.minOnDurationMs;
+
+    function setActive(active) {
+      if (active === isActive) return;
+      isActive = active;
+      lastSwitchAt = now();
+
+      if (isActive) {
+        heygenIframe.src = HEYGEN_URL;
+        heygenWrap.classList.add("show");
+        ovIdle.classList.add("hidden");
+        ovPerm.classList.add("hidden");
+        ovErr.classList.add("hidden");
+      } else {
+        heygenWrap.classList.remove("show");
+        heygenIframe.src = "about:blank";
+        ovIdle.classList.remove("hidden");
+      }
+    }
+
+    // ===== Init MediaPipe Face Detection =====
+    let lastScore = 0;
+    let lastFaces = 0;
+
+    const faceDetection = new FaceDetection.FaceDetection({
+      locateFile: (file) => CONFIG.locateAssets(file)
+    });
+
+    faceDetection.setOptions({
+      model: "short",
+      minDetectionConfidence: CONFIG.detectionConfidence
+    });
+
+    faceDetection.onResults((results) => {
+      const t = now();
+      const faces = (results && results.detections) ? results.detections : [];
+      lastFaces = faces.length;
+
+      lastScore = 0;
+      if (faces.length) {
+        for (const d of faces) {
+          const score = Array.isArray(d.score) ? (d.score[0] || 0) : (d.score || 0);
+          if (score > lastScore) lastScore = score;
+        }
+      }
+
+      const faceDetected = faces.length > 0 && lastScore >= CONFIG.detectionConfidence;
+
+      if (faceDetected) {
+        faceAbsentSince = null;
+        if (facePresentSince === null) facePresentSince = t;
+
+        if (!isActive && canSwitchToActive() && (t - facePresentSince) >= CONFIG.presenceOnMs) {
+          setActive(true);
+        }
+      } else {
+        facePresentSince = null;
+        if (faceAbsentSince === null) faceAbsentSince = t;
+
+        if (isActive && canSwitchToPaused() && (t - faceAbsentSince) >= CONFIG.presenceOffMs) {
+          setActive(false);
+        }
+      }
+
+      if (CONFIG.debug) {
+        hud.textContent = `faces: ${lastFaces}\nscore: ${lastScore.toFixed(2)}\nstate: ${isActive ? "ACTIVE" : "PAUSED"}`;
+      }
+    });
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: CONFIG.selfieMode ? "user" : "environment" },
+          audio: false
+        });
+        camVideo.srcObject = stream;
+        await new Promise((res) => camVideo.onloadedmetadata = () => res());
+
+        const camera = new Camera(camVideo, {
+          onFrame: async () => { await faceDetection.send({ image: camVideo }); },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+      } catch (err) {
+        ovIdle.classList.add("hidden");
+        ovPerm.classList.remove("hidden");
+        ovErr.classList.remove("hidden");
+        ovErrMsg.textContent = (err && (err.name || err.message))
+          ? `${err.name || "Errore"}: ${err.message || ""}`
+          : "Impossibile avviare la videocamera.";
+        console.error("Camera error:", err);
+      }
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) setActive(false);
+    });
+
+    (async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        ovIdle.classList.add("hidden");
+        ovErr.classList.remove("hidden");
+        ovErrMsg.textContent = "Browser non compatibile con la videocamera (getUserMedia).";
+        return;
+      }
+      setActive(false);
+      await initCamera();
+    })();
+  </script>
+</body>
+</html>
